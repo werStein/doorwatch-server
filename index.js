@@ -2,14 +2,36 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const bodyParser = require('body-parser');
+const joi = require('joi');
+const bcrypt = require('bcrypt');
+
+const memberSchema = joi.object().keys({
+  cardId: joi.string(),
+  firstName: joi.string(),
+  lastName: joi.string(),
+  resortId: joi.string(),
+  lastLogin: joi.string(),
+  deactivated: joi.boolean()
+});
+
+const accountSchema = joi.object().keys({
+  resortId: joi.string(),
+  leaderId: joi.string(),
+  password: joi.string()
+});
+
+const attemptSchema = joi.object().keys({
+  cardId: joi.string(),
+  date: joi.string()
+})
 
 const app = express();
 
-app.use( bodyParser.json() );       // to support JSON-encoded bodies
+app.use(bodyParser.json()); // to support JSON-encoded bodies
 
 app.use(express.json());
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'frontend/dist/doorwatch')));
 
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -25,7 +47,7 @@ app.use((req, res, next) => {
 });
 
 // MOCK DATA
-users = [
+members = [
   {
     cardId: '1',
     firstName: 'Christoph',
@@ -78,122 +100,117 @@ users = [
 
 attempts = [
   {
-    id: '10',
+    cardId: '10',
     date: new Date()
   },
   {
-    id: '11',
+    cardId: '11',
     date: new Date()
   },
   {
-    id: '12',
+    cardId: '12',
     date: new Date()
   }
 ];
 
-resorts = [
+accounts = [
   {
-    id: 'vorstand',
+    resortId: 'vorstand',
     leaderId: '1',
     password: 'vorstand'
   },
   {
-    id: 'marketing',
+    resortId: 'wim',
     leaderId: '2',
-    password: 'marketing'
+    password: 'wim'
   },
   {
-    id: 'cr',
+    resortId: 'cr',
     leaderId: '3',
     password: 'cr'
   },
   {
-    id: 'admin',
+    resortId: 'admin',
     leaderId: '1',
     password: 'admin'
   }
 ];
 
-
-
 /** USER ENDPOINTS */
 
-app.get('/api/users', verifyToken, (req, res) => {
+app.get('/api/members', verifyToken, (req, res) => {
   jwt.verify(req.token, 'secretkex', (err, authData) => {
     if (err) {
       res.sendStatus(401);
     } else {
-      const user = authData.user;
-      if (user.id === 'admin') {
-        res.json({ users });
+      const account = authData.account;
+      if (account.resortId === 'admin') {
+        res.json({ members });
       } else {
-        const filteredUsers = users.filter(u => u.resortId === user.id);
-        res.json({ users: filteredUsers });
-        // return all users belonging to the resort of the authenticated user
+        const filteredMembers = members.filter(
+          m => m.resortId === account.resortId
+        );
+        res.json({ members: filteredMembers });
       }
     }
   });
 });
 
-app.post('/api/user', verifyToken, (req, res) => {
-  let newUser = req.body.user;
-  if (!newUser) {
+app.post('/api/member', verifyToken, (req, res) => {
+  const newMember = req.body.member;
+  const validation = joi.validate(newMember, memberSchema);
+  if (validation.error) {
     return res.sendStatus(400);
   }
   jwt.verify(req.token, 'secretkex', (err, authData) => {
     if (err) {
       res.sendStatus(401);
     } else {
-      const user = authData.user;
-      if (user.id !== 'admin') {
+      const account = authData.account;
+      if (account.resortId !== 'admin') {
         // set resort of new user to resort of user sending request
-        newUser.resortId = user.resortId;
-      } 
-      // will be set by admin in frontend modal
-      users.push(newUser);
-      res.json({user: newUser});
-    }
-  });
-});
-
-app.put('/api/user', verifyToken, (req, res) => {
-  const editUser = req.body.user;
-  if (!editUser) {
-    return res.sendStatus(400);
-  }
-  jwt.verify(req.token, 'secretkex', (err, authData) => {
-    if (err) {
-      res.sendStatus(401);
-    } else {
-      const user = authData.user;
-      if (user.id === 'admin') {
-        // replace user by edited user
-        // only allowed for admin user
-        const userIndex = users.findIndex(u => u.id = editUser.id);
-        users[userIndex] = editUser;
-        res.json({user: editUser});
-      } else {
-        res.sendStatus(403);
+        newMember.resortId = account.resortId;
       }
+      members.push(newMember);
+      // remove the corresponding login attempt
+      attempts = attempts.filter(a => a.cardId !== newMember.cardId);
+      res.json({ member: newMember });
     }
   });
 });
 
-app.delete('/api/user/userId', verifyToken, (req, res) => {
-  const deleteUserId = req.params.userId;
-  if (!deleteUserId) {
+app.put('/api/member', verifyToken, (req, res) => {
+  const editMember = req.body.member;
+  const validation = joi.validate(editMember, memberSchema);
+  if (validation.error) {
     return res.sendStatus(400);
   }
   jwt.verify(req.token, 'secretkex', (err, authData) => {
     if (err) {
       res.sendStatus(401);
     } else {
-      const user = authData.user;
-      if (user.id === 'admin') {
+      const memberIndex = members.findIndex(m => m.cardId === editMember.cardId);
+      members[memberIndex] = editMember;
+      res.json({ member: editMember });
+    }
+  });
+});
+
+app.delete('/api/member/:memberId', verifyToken, (req, res) => {
+  const deleteMemberId = req.params.memberId;
+  if (!deleteMemberId) {
+    return res.sendStatus(400);
+  }
+  jwt.verify(req.token, 'secretkex', (err, authData) => {
+    if (err) {
+      res.sendStatus(401);
+    } else {
+      const account = authData.account;
+      if (account.resortId === 'admin') {
         // remove selected user from list of all users
         // only allowed for admin user
-        users = users.filter(u => u.id !== deleteUserId);
-        res.json({userId: deleteUserId});
+        member = members.filter(m => m.id !== deleteMemberId);
+        res.json({ memberId: deleteMemberId });
       } else {
         res.sendStatus(403);
       }
@@ -209,42 +226,53 @@ app.get('/api/attempts', verifyToken, (req, res) => {
     } else {
       res.json({ attempts });
     }
-  })
+  });
 });
-
-
 
 /** RESORT ENDPOINTS */
 
-app.get('/api/resorts', verifyToken, (req, res) => {
+app.get('/api/accounts', verifyToken, (req, res) => {
   jwt.verify(req.token, 'secretkex', (err, authData) => {
     if (err) {
       res.sendStatus(401);
     } else {
-      const formattedResorts = resorts.map(r => {
+      const formattedAccounts = accounts.filter(a => a.resortId !== 'admin').map(a => {
         return {
-          id: r.id,
-          leaderId: r.leaderId
+          resortId: a.resortId,
+          leaderId: a.leaderId
         };
       });
-      res.json({resorts: formattedResorts});
+      res.json({ accounts: formattedAccounts });
     }
   });
 });
 
-app.post('/api/resort', verifyToken, (req, res) => {
-  const newResort = req.body.resort;
-  if (!newResort) {
+app.post('/api/account', verifyToken, (req, res) => {
+  const resort = req.body.resort;
+  const password = req.body.password;
+
+  if(!resort || !password) {
+    return res.sendStatus(400);
+  }
+
+  const newAccount = {
+    resortId: resort.resortId,
+    leaderId: resort.leaderId,
+    password: password
+  };
+
+  const validation = joi.validate(newAccount, accountSchema);
+  if (validation.error) {
     return res.sendStatus(400);
   }
   jwt.verify(req.token, 'secretkex', (err, authData) => {
     if (err) {
       res.sendStatus(401);
     } else {
-      const user = authData.user;
-      if (user.id === 'admin') {
-        resorts.push(newResort);
-        res.json({resort: newResort});
+      const account = authData.account;
+      if (account.resortId === 'admin' && newAccount.resortId !== 'admin') {
+        accounts.push(newAccount);
+        res.json({ account: newAccount });
       } else {
         res.sendStatus(403);
       }
@@ -252,20 +280,35 @@ app.post('/api/resort', verifyToken, (req, res) => {
   });
 });
 
-app.put('/api/resort', verifyToken, (req, res) => {
-  const editResort = req.body.resort;
-  if (!editResort) {
+app.put('/api/account', verifyToken, (req, res) => {
+  const resort = req.body.resort;
+  const password = req.body.password;
+
+  if(!resort || !password) {
+    return res.sendStatus(400);
+  }
+
+  const editAccount = {
+    resortId: resort.resortId,
+    leaderId: resort.leaderId,
+    password: password
+  };
+  
+  const validation = joi.validate(editAccount, accountSchema);
+  if (validation.error) {
     return res.sendStatus(400);
   }
   jwt.verify(req.token, 'secretkex', (err, authData) => {
     if (err) {
       res.sendStatus(401);
     } else {
-      const user = authData.user;
-      if (user.id === 'admin') {
-        const resortId = resorts.findIndex(r => r.id === editResort.id);
-        resorts[resortId] = editResort;
-        res.json({resort: editResort})
+      const account = authData.account;
+      if (account.resortId === 'admin' && editAccount.resortId !== 'admin') {
+        const accountId = accounts.findIndex(
+          a => a.resortId === editAccount.resortId
+        );
+        accounts[accountId] = editAccount;
+        res.json({ account: editAccount });
       } else {
         res.sendStatus(403);
       }
@@ -273,19 +316,19 @@ app.put('/api/resort', verifyToken, (req, res) => {
   });
 });
 
-app.delete('/api/resort/:resortId', verifyToken, (req, res) => {
-  const deleteResortId = req.params.resortId;
-  if (!deleteResortId) {
+app.delete('/api/account/:accountId', verifyToken, (req, res) => {
+  const deleteAccountId = req.params.accountId;
+  if (!deleteAccountId) {
     return res.sendStatus(400);
   }
   jwt.verify(req.token, 'secretkex', (err, authData) => {
     if (err) {
       res.sendStatus(401);
     } else {
-      const user = authData.user;
-      if (user.id === 'admin') {
-        resorts = resorts.filter(r => r.id !== deleteResortId);
-        res.json({resortId: deleteResortId});
+      const account = authData.account;
+      if (account.resortId === 'admin') {
+        accounts = accounts.filter(a => a.resortId !== deleteAccountId);
+        res.json({ accountId: deleteAccountId });
       } else {
         res.sendStatus(403);
       }
@@ -300,17 +343,30 @@ app.post('/api/login', (req, res) => {
 
   if (!userName || !password) {
     return res.sendStatus(400);
-  } 
+  }
 
   // get user from db
-  const user = resorts.find(r => r.id === userName && r.password === password);
-  if (!user) {
+  const account = accounts.find(
+    a => a.resortId === userName && a.password === password
+  );
+  if (!account) {
     return res.sendStatus(404);
   } else {
-    jwt.sign({ user }, 'secretkex', { expiresIn: '10m' }, (err, token) => {
+    jwt.sign({ account }, 'secretkex', { expiresIn: '10m' }, (err, token) => {
       res.json({ token });
     });
   }
+});
+
+/** OPEN DOOR MANUALLY ENDPOINT */
+app.post('/api/open', verifyToken, (req, res) => {
+  jwt.verify(req.token, 'secretkex', (err, authData) => {
+    if (err) {
+      res.sendStatus(401);
+    } else {
+      res.sendStatus(200);
+    }
+  });
 });
 
 // format of token
@@ -331,7 +387,7 @@ function verifyToken(req, res, next) {
 }
 
 app.get('/*', (req, res) => {
-  res.sendFile(path.resolve('public/index.html'));
+  res.sendFile(path.resolve('/frontend/dist/doorwatch/index.html'));
 });
 
 const port = process.env.port || 3000;
